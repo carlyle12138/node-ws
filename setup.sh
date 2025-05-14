@@ -1,8 +1,16 @@
 #!/bin/bash
 
-# --- Configuration: Replace with your actual URLs for the files above ---
-NEW_INDEX_JS_URL="https://raw.githubusercontent.com/carlyle12138/node-ws/main/index.js"
-NEW_CRON_SH_URL="https://raw.githubusercontent.com/carlyle12138/node-ws/main/cron.sh"
+# --- Configuration: Replace with your actual URLs for the template files ---
+# These template files should contain the placeholders as expected by this script.
+TEMPLATE_INDEX_JS_URL="https://raw.githubusercontent.com/carlyle12138/node-ws/main/index.js"
+TEMPLATE_CRON_SH_URL="hhttps://raw.githubusercontent.com/carlyle12138/node-ws/main/cron.sh"
+
+# --- Output Mode ---
+PREVIEW_MODE=false
+if [ "$1" == "--stdout-only" ]; then
+  PREVIEW_MODE=true
+  shift # Remove --stdout-only from arguments, $1 is now the domain
+fi
 
 # --- Helper Functions ---
 print_error() { echo -e "\033[0;31mError: $1\033[0m" >&2; }
@@ -10,42 +18,33 @@ print_success() { echo -e "\033[0;32m$1\033[0m"; }
 print_info() { echo -e "\033[0;34m$1\033[0m"; }
 
 # --- Main Script ---
-clear
-print_info "Node.js VLESS WebSocket Server Setup (Simplified)"
-print_info "================================================"
+if [ "$PREVIEW_MODE" = false ]; then
+  clear
+  print_info "Node.js VLESS WebSocket Server Setup (Simplified)"
+  print_info "================================================"
+else
+  print_info "--- PREVIEW MODE: Generating file contents to stdout ---"
+fi
 
 if [ -z "$1" ]; then
   print_error "Domain name is required!"
-  echo "Usage: $0 yourdomain.com"
+  echo "Usage: $0 [--stdout-only] yourdomain.com"
   exit 1
 fi
 
 TARGET_DOMAIN=$1
 USERNAME=$(whoami)
-APP_PORT=$((RANDOM % 40001 + 20000)) # Random port for the application
+APP_PORT=$((RANDOM % 40001 + 20000))
 
-APP_BASE_DIR="/home/$USERNAME/domains/$TARGET_DOMAIN" # Adjust if structure differs
+# Define paths (used in normal mode)
+APP_BASE_DIR="/home/$USERNAME/domains/$TARGET_DOMAIN"
 APP_PUBLIC_HTML_DIR="$APP_BASE_DIR/public_html"
-CRON_SCRIPT_INSTALL_PATH="/home/$USERNAME/app_vless_cron.sh" # Renamed for clarity
+CRON_SCRIPT_INSTALL_PATH="/home/$USERNAME/app_vless_cron.sh" # Standardized name
 
-mkdir -p "$APP_PUBLIC_HTML_DIR"
-if [ $? -ne 0 ]; then print_error "Failed to create directory: $APP_PUBLIC_HTML_DIR"; exit 1; fi
-cd "$APP_PUBLIC_HTML_DIR" || exit 1
+# --- Collect Configuration Details (always needed) ---
+if [ "$PREVIEW_MODE" = false ]; then print_info "Collecting configuration details..."; fi
 
-print_info "Downloading necessary files..."
-curl -s -L -o "$APP_PUBLIC_HTML_DIR/index.js" "$NEW_INDEX_JS_URL"
-if [ $? -ne 0 ] || [ ! -s "$APP_PUBLIC_HTML_DIR/index.js" ]; then
-  print_error "Failed to download index.js from $NEW_INDEX_JS_URL"; exit 1;
-fi
-
-curl -s -L -o "$CRON_SCRIPT_INSTALL_PATH" "$NEW_CRON_SH_URL"
-if [ $? -ne 0 ] || [ ! -s "$CRON_SCRIPT_INSTALL_PATH" ]; then
-  print_error "Failed to download cron.sh from $NEW_CRON_SH_URL"; exit 1;
-fi
-chmod +x "$CRON_SCRIPT_INSTALL_PATH"
-
-print_info "Collecting configuration details..."
-DEFAULT_UUID=$(uuidgen 2>/dev/null || echo "de04add9-5c68-4bab-950c-08cd5320df33") # Fallback if uuidgen fails
+DEFAULT_UUID=$(uuidgen 2>/dev/null || echo "bf4c9a9f-1a84-4a2c-8318-0f2176cf0393") # Fallback UUID
 read -rp "Enter VLESS UUID (default: $DEFAULT_UUID): " USER_UUID
 USER_UUID=${USER_UUID:-$DEFAULT_UUID}
 if ! [[ "$USER_UUID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
@@ -58,16 +57,40 @@ USER_SUB_PATH=${USER_SUB_PATH:-sub}
 read -rp "Enter node name prefix (default: MyVlessNode): " USER_NODE_NAME
 USER_NODE_NAME=${USER_NODE_NAME:-MyVlessNode}
 
-print_info "Configuring index.js..."
-# Use a different sed delimiter if paths/domains might contain the default '/'
-sed -i "s/'YOUR_UUID_PLACEHOLDER'/'$USER_UUID'/g" "$APP_PUBLIC_HTML_DIR/index.js"
-sed -i "s/'YOUR_SUB_PATH_PLACEHOLDER'/'$USER_SUB_PATH'/g" "$APP_PUBLIC_HTML_DIR/index.js"
-sed -i "s/'YOUR_NAME_PLACEHOLDER'/'$USER_NODE_NAME'/g" "$APP_PUBLIC_HTML_DIR/index.js"
-sed -i "s/process.env.PORT || 0/process.env.PORT || $APP_PORT/g" "$APP_PUBLIC_HTML_DIR/index.js" # Replace default port 0
-sed -i "s/'YOUR_DOMAIN_PLACEHOLDER'/'$TARGET_DOMAIN'/g" "$APP_PUBLIC_HTML_DIR/index.js"
+# --- Prepare index.js content ---
+TEMP_INDEX_JS=$(mktemp)
+# shellcheck disable=SC2154 # USER_UUID etc. are defined above
+INDEX_JS_CONTENT_GENERATOR() {
+  # Download template
+  curl -s -L -o "$TEMP_INDEX_JS" "$TEMPLATE_INDEX_JS_URL"
+  if [ $? -ne 0 ] || [ ! -s "$TEMP_INDEX_JS" ]; then
+    print_error "Failed to download index.js template from $TEMPLATE_INDEX_JS_URL"
+    rm "$TEMP_INDEX_JS"
+    exit 1
+  fi
+  # Apply substitutions
+  sed -i "s/'YOUR_UUID_PLACEHOLDER'/'$USER_UUID'/g" "$TEMP_INDEX_JS"
+  sed -i "s/'YOUR_SUB_PATH_PLACEHOLDER'/'$USER_SUB_PATH'/g" "$TEMP_INDEX_JS"
+  sed -i "s/'YOUR_NAME_PLACEHOLDER'/'$USER_NODE_NAME'/g" "$TEMP_INDEX_JS"
+  sed -i "s/process.env.PORT || 0/process.env.PORT || $APP_PORT/g" "$TEMP_INDEX_JS"
+  sed -i "s/'YOUR_DOMAIN_PLACEHOLDER'/'$TARGET_DOMAIN'/g" "$TEMP_INDEX_JS"
+}
 
-print_info "Creating package.json..."
-cat > "$APP_PUBLIC_HTML_DIR/package.json" << EOF
+# --- Prepare app_vless_cron.sh content ---
+TEMP_CRON_SH=$(mktemp)
+CRON_SH_CONTENT_GENERATOR() {
+  curl -s -L -o "$TEMP_CRON_SH" "$TEMPLATE_CRON_SH_URL"
+  if [ $? -ne 0 ] || [ ! -s "$TEMP_CRON_SH" ]; then
+    print_error "Failed to download cron.sh template from $TEMPLATE_CRON_SH_URL"
+    rm "$TEMP_CRON_SH"
+    exit 1
+  fi
+}
+
+# --- Prepare package.json content ---
+# shellcheck disable=SC2154
+PACKAGE_JSON_CONTENT_GENERATOR() {
+  cat << EOF
 {
   "name": "node-vless-ws-server",
   "version": "1.0.0",
@@ -87,23 +110,84 @@ cat > "$APP_PUBLIC_HTML_DIR/package.json" << EOF
   }
 }
 EOF
+}
 
-print_info "Setting up cron job..."
-CRON_JOB_LINE="*/2 * * * * $CRON_SCRIPT_INSTALL_PATH" # Runs every 2 minutes
-(crontab -l 2>/dev/null | grep -v -F "$CRON_SCRIPT_INSTALL_PATH" ; echo "$CRON_JOB_LINE") | crontab -
-if [ $? -eq 0 ]; then
-  print_success "Cron job set up successfully."
-  print_info "Cron script log: $APP_PUBLIC_HTML_DIR/cron_run.log (created by cron.sh)"
-else
-  print_error "Failed to set up cron job. Please set it up manually:"
-  print_error "$CRON_JOB_LINE"
+if [ "$PREVIEW_MODE" = true ]; then
+  # Generate and output index.js
+  INDEX_JS_CONTENT_GENERATOR > /dev/null 2>&1 # Suppress curl/sed output, operate on $TEMP_INDEX_JS
+  echo ""
+  echo "--- BEGIN index.js ---"
+  cat "$TEMP_INDEX_JS"
+  echo "--- END index.js ---"
+  
+  # Generate and output app_vless_cron.sh
+  CRON_SH_CONTENT_GENERATOR > /dev/null 2>&1 # Suppress curl output, operate on $TEMP_CRON_SH
+  echo ""
+  echo "--- BEGIN app_vless_cron.sh ---"
+  cat "$TEMP_CRON_SH"
+  echo "--- END app_vless_cron.sh ---"
+
+  # Generate and output package.json
+  echo ""
+  echo "--- BEGIN package.json ---"
+  PACKAGE_JSON_CONTENT_GENERATOR
+  echo "--- END package.json ---"
+
+  # Preview cron job
+  CRON_JOB_LINE="*/2 * * * * /home/$USERNAME/app_vless_cron.sh # Path would be $CRON_SCRIPT_INSTALL_PATH in actual install"
+  echo ""
+  echo "--- Cron Job (Preview) ---"
+  echo "Would add/update cron job line similar to: $CRON_JOB_LINE"
+  
+  print_info "Preview generation complete. No files were written or system changes made."
+
+else # Normal execution mode
+  if [ ! -d "$APP_PUBLIC_HTML_DIR" ]; then
+      print_info "Creating directory: $APP_PUBLIC_HTML_DIR..."
+      mkdir -p "$APP_PUBLIC_HTML_DIR"
+      if [ $? -ne 0 ]; then print_error "Failed to create directory: $APP_PUBLIC_HTML_DIR"; rm "$TEMP_INDEX_JS" "$TEMP_CRON_SH"; exit 1; fi
+  fi
+  
+  # Create actual index.js
+  INDEX_JS_CONTENT_GENERATOR > /dev/null 2>&1
+  cp "$TEMP_INDEX_JS" "$APP_PUBLIC_HTML_DIR/index.js"
+  if [ $? -ne 0 ]; then print_error "Failed to write index.js"; rm "$TEMP_INDEX_JS" "$TEMP_CRON_SH"; exit 1; fi
+  print_info "index.js configured and saved to $APP_PUBLIC_HTML_DIR/index.js"
+
+  # Create actual app_vless_cron.sh
+  CRON_SH_CONTENT_GENERATOR > /dev/null 2>&1
+  cp "$TEMP_CRON_SH" "$CRON_SCRIPT_INSTALL_PATH"
+  if [ $? -ne 0 ]; then print_error "Failed to write $CRON_SCRIPT_INSTALL_PATH"; rm "$TEMP_INDEX_JS" "$TEMP_CRON_SH"; exit 1; fi
+  chmod +x "$CRON_SCRIPT_INSTALL_PATH"
+  print_info "app_vless_cron.sh configured and saved to $CRON_SCRIPT_INSTALL_PATH"
+
+  # Create actual package.json
+  PACKAGE_JSON_CONTENT_GENERATOR > "$APP_PUBLIC_HTML_DIR/package.json"
+  if [ $? -ne 0 ]; then print_error "Failed to write package.json"; rm "$TEMP_INDEX_JS" "$TEMP_CRON_SH"; exit 1; fi
+  print_info "package.json created in $APP_PUBLIC_HTML_DIR"
+
+  # Setup cron job
+  print_info "Setting up cron job..."
+  CRON_JOB_LINE="*/2 * * * * $CRON_SCRIPT_INSTALL_PATH"
+  (crontab -l 2>/dev/null | grep -v -F "$CRON_SCRIPT_INSTALL_PATH" ; echo "$CRON_JOB_LINE") | crontab -
+  if [ $? -eq 0 ]; then
+    print_success "Cron job set up successfully."
+    print_info "Cron script log: $APP_PUBLIC_HTML_DIR/cron_run.log (created by app_vless_cron.sh)"
+  else
+    print_error "Failed to set up cron job. Please set it up manually:"
+    print_error "$CRON_JOB_LINE"
+  fi
+
+  print_success "Setup complete!"
+  print_info "Application installed in: $APP_PUBLIC_HTML_DIR"
+  print_info "Service will run on port: $APP_PORT"
+  print_info "Ensure Node.js dependencies are installed: cd \"$APP_PUBLIC_HTML_DIR\" && npm install"
+  print_info "Start manually: nohup node index.js > out.log 2>&1 & (or wait for cron)"
+  echo
+  print_info "To start immediately, run:"
+  print_info "cd \"$APP_PUBLIC_HTML_DIR\" && npm install && nohup node index.js > out.log 2>&1 &"
+
 fi
 
-print_success "Setup complete!"
-print_info "Application installed in: $APP_PUBLIC_HTML_DIR"
-print_info "Service will run on port: $APP_PORT"
-print_info "Ensure Node.js dependencies are installed: cd $APP_PUBLIC_HTML_DIR && npm install"
-print_info "Start manually: nohup node index.js > out.log 2>&1 & (or wait for cron)"
-echo
-print_info "To start immediately, run:"
-print_info "cd \"$APP_PUBLIC_HTML_DIR\" && npm install && nohup node index.js > out.log 2>&1 &"
+# Cleanup temporary files
+rm "$TEMP_INDEX_JS" "$TEMP_CRON_SH" 2>/dev/null
